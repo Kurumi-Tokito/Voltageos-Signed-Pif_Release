@@ -1,0 +1,51 @@
+name: CI
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 16 * * *"
+
+jobs:
+  check:
+    permissions: write-all
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Should build?
+        id: should_build
+        shell: bash
+        run: |
+          LATEST_COMMIT_HASH="$(curl -s https://gitlab.com/api/v4/projects/52847655/repository/commits | jq -r '.[0].id')"
+          SHORT_HASH="${LATEST_COMMIT_HASH:0:8}"
+          Prev_HASH="$(grep "Commit_Hash" .hash | cut -f2 -d '=' | tr -d '"')"
+          if [[ "$Prev_HASH" == "$LATEST_COMMIT_HASH" ]]; then
+            echo "SHOULD_BUILD=0" >> $GITHUB_OUTPUT
+          else
+            echo "SHOULD_BUILD=1" >> $GITHUB_OUTPUT
+          fi
+          echo "HASH=$LATEST_COMMIT_HASH" >> $GITHUB_OUTPUT
+          echo "SHORT_HASH=$SHORT_HASH" >> $GITHUB_OUTPUT
+
+      - name: Clear older runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run list -L400 --json databaseId -q '.[].databaseId' | tail -n+10 | xargs -IID gh api "repos/$GITHUB_REPOSITORY/actions/runs/ID" -X DELETE || :
+
+    outputs:
+      SHOULD_BUILD: ${{ steps.should_build.outputs.SHOULD_BUILD }}
+      HASH: ${{ steps.should_build.outputs.HASH }}
+      SHORT_HASH: ${{ steps.should_build.outputs.SHORT_HASH }}
+
+  build:
+    permissions: write-all
+    needs: check
+    uses: ./.github/workflows/build.yml
+    if: ${{ needs.check.outputs.SHOULD_BUILD == 1 }}
+    secrets: inherit
+    with:
+      HASH:  ${{ needs.check.outputs.HASH }}
+      SHORT_HASH:  ${{ needs.check.outputs.SHORT_HASH }}
